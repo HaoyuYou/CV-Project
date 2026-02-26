@@ -1,0 +1,599 @@
+---
+title: "STAT 306 2024W2 - Project: Report"
+format: 
+  pdf:
+    fontsize: 10pt
+    documentclass: article
+    geometry: margin=1in
+
+execute: 
+  echo: false
+  message: false
+  warning: false
+
+editor: visual
+---
+
+# Group Project Report
+
+## Introduction
+
+Housing is one of the most fundamental elements of our lives, and the volatility in housing prices directly affects many people^1^ (UN, n.d.). As a result, housing prices have become a topic of significant interest, not only as an economic indicator but also in social and personal contexts. The goal of this project was to build a linear regression model to find out the relationship between house **sale prices** and **living area** (`Gr.Liv.Area`), **number of bedrooms above ground** (`Bedroom.AbvGr`) and **construction year** (`Year.Built`) using the Ames Housing dataset. The dataset includes 2,930 observations and 82 variables, covering aspects such as house size, location, and various other factors in relation to **SalePrice**. Given the large number of variables, we narrowed down the covariates through data cleaning and feature selection to make the dataset manageable. Additionally, we addressed potential violations of regression assumptions by applying transformations to ensure the model's validity.
+
+During the model-building process, we examined linear relationships and applied variable transformations to address issues like non-constant variance and heavy-tailed residual distribution. We also used forward selection to choose the most appropriate covariates. After selecting the final model, we performed diagnostic checks and considered the impact of outliers and high leverage points. Finally, we explored the effects of interaction terms between categorical and numerical variables.
+
+## **Dataset Overview & Data Cleaning**
+
+For this project, we used the Ames Housing dataset, which includes 2,930 observations and 82 variables describing residential properties in Ames, Iowa. The variables cover a wide range of features—like the house's size, year built, number of rooms, and some ratings on quality and condition. There are both numeric variables (e.g., **Gr.Liv.Area, Garage.Area, Lot.Area, Year.Built**) and categorical ones (e.g., **Lot.Shape, Electrical, Central.Air**).To make the dataset more manageable and suitable for modeling, we first selected 18 candidate variables based on interpretability and data completeness. Then we applied a few more filtering steps:
+
+Since 82 variables are too many for a linear regression model, we narrowed it down in two steps. First, we picked 18 variables that seemed interpretable and didn’t have too many missing values. Then we filtered them further using the following criteria:
+
+-   Missing data: Variables like **Pool.Area,** **Fence**, and **Misc.Feature** had too many *NAs* or were rarely used, so we removed them early.
+
+-   Low correlation: Variables that didn’t show a meaningful relationship with **SalePrice** (correlation less than 0.3 in absolute value) were excluded.
+
+-   Redundancy: When two variables meant basically the same thing (like **Year.Built** and **Year.Remod.Add**), we kept only one.
+
+-   Too many levels: Categorical variables like **Neighborhood** or **Bldg.Type** had too many categories, which could lead to overfitting, so we dropped them.
+
+-   Subjectivity: Some rating-based variables were too subjective to be reliable.
+
+After these steps, we finalized a list of 14 variables: 13 covariates and **SalePrice** as the response. Here's a summary of the main ones used:
+
+-   **SalePrice**: House sale price (divided by 1,000 for scale)
+
+-   **Overall.Qual**: Overall quality rating (1–10)
+
+-   **Gr.Liv.Area**: Above-ground living area (sqft)
+
+-   **Garage.Area**: Garage area (sqft)
+
+-   **Year.Built**: Construction year
+
+-   **Lot.Area**: Lot size (sqft)
+
+-   **Bedroom.AbvGr**: Number of bedrooms above ground
+
+-   **Kitchen.AbvGr**: Number of kitchens above ground
+
+-   **Lot.Shape**: Shape of the lot categorized as Reg (regular), IR1, IR2, and IR3 in order of increasing irregularity
+
+-   **TotRms**.AbvGrd: Total number of rooms above ground
+
+-   **Utilities**: Categorical type of utilities available to the property
+
+-   **Electrical**: Categorical type of electrical system installed in the house
+
+-   **Central.Air**: Status of central air conditioning (Y, N)
+
+-   **Yr.Sold**: Other relevant categorical/numeric info
+
+As for data cleaning, we didn’t need to do any restructuring since the dataset came in clean CSV format. But we did some basic prep work: for instance, we converted character-based categorical variables like **Lot.Shape** into factor type using as.factor(). We also checked for missing values using `colSums(is.na())`, but since we already removed problematic variables, our final dataset was clean.
+
+Finally, we adjusted a few column types—like turning **Year.Built** and **Bedroom.AbvGr** into integers—to make the modeling process easier. We also ran `summary()` to explore the variable distributions and noticed some skewed distributions and outliers, especially in **SalePrice**, which we handled later with log transformation.
+
+```{r}
+#| output: false
+
+library(car)
+library(leaps)
+library(knitr)
+library(kableExtra)
+library(olsrr)
+library(ggplot2)
+library(patchwork)
+library(broom)
+
+# options(repr.matrix.max.rows = 20)
+
+ames_housing <- read.table("https://raw.githubusercontent.com/AllenCheng5186/STAT306-G14-Group-Project/refs/heads/main/data/ames-housing.csv", sep = ",", header=T)
+
+ames_housing$SalePrice <- ames_housing$SalePrice / 10000
+
+house = ames_housing[, c("SalePrice", "Overall.Qual", "Gr.Liv.Area",
+                         "Garage.Area", "Year.Built", "Lot.Area",
+                         "Bedroom.AbvGr", "Kitchen.AbvGr", "Lot.Shape",
+                         "Utilities", "Yr.Sold", "Central.Air",
+                         "Electrical", "TotRms.AbvGrd")]
+
+house[sapply(house, is.character)] <- lapply(house[sapply(house, is.character)], as.factor)
+# house$Overall.Qual <- as.factor(house$Overall.Qual)
+house[is.na(house)] <- 0
+
+head(house)
+```
+
+## Explorative Data Analysis
+
+Before modeling, we visualized the relationship between **SalePrice** and some categorical variables using boxplots. For example, houses with **Central Air** tended to have higher sale prices than those without it, and homes with **SBrkr** electrical systems also showed higher average prices compared to other types.
+
+```{r fig.height=4.5,fig.width=16}
+#| output: true
+
+par(mfrow = c(1, 4))
+boxplot(house$SalePrice~house$Lot.Shape, ylab="Sale Price (10,000$)", xlab="Lot Shape")
+boxplot(house$SalePrice~house$Utilities, ylab="Sale Price (10,000$)", xlab="Utilities")
+boxplot(house$SalePrice~house$Electrical, ylab="Sale Price (10,000$)", xlab="Electrical")
+boxplot(house$SalePrice~house$Central.Air, ylab="Sale Price (10,000$)", xlab="Central.Air")
+```
+
+*Fig 1: Boxplots of SalePrice by Lot Shape, Utilities Electrical System and Central Air*
+
+From above boxplots, we notices that there are observed right skew on the majority of the categories, which is a signal to do log transformation on response variable. We will confirm the necessity of log transformation in the following model diagnosis with residual plot and qqplot.
+
+## **Model Diagnosis**
+
+To check if our linear regression model satisfied the required assumptions, we examined two key diagnostic plots: the residuals vs fitted values plot and the Q-Q plot.
+
+In the residuals vs fitted values plot, we observed a funnel shape, where the spread of residuals increased as the fitted values grew, indicating a violation of the homoscedasticity assumption (the assumption that the variance of errors is constant). Additionally, in the Q-Q plot, the residuals deviated from the theoretical reference line, especially at the tails, suggesting that the normality assumption might not hold.
+
+These issues imply that our model could have non-constant variance and heavy-tailed residual distribution, which can affect the validity of statistical inferences. To address this, we decided to apply a log transformation to the **SalePrice** variable.
+
+```{r fig.height=4,fig.width=8}
+#| output: true
+full_model = lm(SalePrice ~ ., data = house)
+
+# summary(full_model)
+
+# options(repr.plot.width = 7, repr.plot.height = 7)
+par(mfrow = c(1, 2))
+plot(full_model$fitted.values, full_model$residuals,
+     xlab="Fitted value", ylab="Residual")
+abline(h = 0, col = "red")
+
+qqnorm(full_model$residuals)
+qqline(full_model$residuals, col = "red")
+```
+
+*Fig.2: Residuals vs Fitted plot (left) and Normal Q-Q plot (right) from the initial model*
+
+## **Log Transformation & Model Rebuilding**
+
+To address the issues we found in the diagnostic plots—like the funnel-shaped residuals and the non-normal distribution—we applied a log transformation to the response variable, **SalePrice**. This step was taken to stabilize variance and make the error distribution closer to normal, both of which are important for linear regression.
+
+After applying the transformation, we examined the scatterplots between **log(SalePrice)** and each continuous parameter. As shown in the figure below, the relationships with **Overall.Qual**, and **Gr.Liv.Area** appear more linear after the log transformation, which suggests the model is now better suited for linear regression.
+
+```{r fig.height=4.5,fig.width=16}
+#| output: true
+# Replace SalePrice values with log-transformed values
+house$SalePrice <- log(house$SalePrice)
+
+# Optionally rename the column (if you want to reflect it's log-transformed)
+names(house)[names(house) == "SalePrice"] <- "log_SalePrice"
+
+num_vars <- names(house)[sapply(house, is.numeric)]
+predictors <- setdiff(num_vars, c("SalePrice", "log_SalePrice", "Overall.Qual", "Lot.Area", "Bedroom.AbvGr", "Kitchen.AbvGr", "Yr.Sold"))
+
+# options(repr.plot.width = 15, repr.plot.height = 10)
+par(mfrow = c(1, 4))
+
+for (var in predictors) {
+  plot(house[[var]], house$log_SalePrice, pch=19,
+       xlab = var, ylab = "log(SalePrice)",
+       main = paste("log(SalePrice) vs", var))
+  grid()
+}
+```
+
+*Fig. 3: Gr.Liv.Area, Year.Built, Garage.Area, TotRms.AbvGrd could have quadratic relationship with log(Sale.Price)*
+
+However, the variable **Year.Built** still showed some curvature, even after the transformation. To capture this non-linear pattern, we included a quadratic term for `Year.Built` in the model: $$(X_{Year.Built}- \bar{X_{Year.Built}})^2$$
+
+After refitting the model using `log(SalePrice)` as the response variable, the residuals appeared more randomly scattered, and the Q-Q plot aligned more closely with the theoretical line. These improvements suggest that the key regression assumptions are now better satisfied, making the model more suitable for inference.
+
+```{r fig.height=4,fig.width=8}
+#| output: true
+# options(repr.plot.width = 7, repr.plot.height = 7)
+house$Quatratic_Gr.Liv.Area = (house$Gr.Liv.Area-mean(house$Gr.Liv.Area))^2
+house$Quatratic_Year.Built = (house$Year.Built-mean(house$Year.Built))^2
+house$Quatratic_Garage.Area = (house$Garage.Area-mean(house$Garage.Area))^2
+house$Quatratic_TotRms.AbvGrd = (house$TotRms.AbvGrd-mean(house$TotRms.AbvGrd))^2
+
+additive_model = lm(log_SalePrice ~ Overall.Qual + 
+                       Gr.Liv.Area + Quatratic_Gr.Liv.Area +
+                       Year.Built + Quatratic_Year.Built+ 
+                       Garage.Area + Quatratic_Garage.Area + 
+                       Central.Air + Lot.Area + Lot.Shape + Kitchen.AbvGr + 
+                       Electrical + Bedroom.AbvGr + Utilities + Yr.Sold +
+                       TotRms.AbvGrd + Quatratic_TotRms.AbvGrd,
+                     data = house)
+
+par(mfrow = c(1, 2))
+plot(x = additive_model$fitted.values, y = additive_model$residuals,
+     xlim = c(1.9, 3.8), ylim =c(-1.0, 0.8),
+     xlab="Fitted value", ylab="Residual")
+qqnorm(additive_model$residuals)
+qqline(additive_model$residuals, col = "red")
+```
+
+*Fig.4: Model Diagnostics After log(SalePrice) Transformation: Residuals vs Fitted and Q-Q Plot*
+
+```{r}
+#| output: false
+summary(additive_model)
+```
+
+## **Multicollinearity check**
+
+Before finalizing the model, we checked for multicollinearity among the predictors using the Variance Inflation Factor (VIF). This helps to identify if any of the explanatory variables are highly correlated with each other, which can distort the interpretation of the regression coefficients. We used the commonly accepted threshold of 10, and all VIF values were well below that level. The highest was around 5.4 for `Gr.Liv.Area`, which is still considered acceptable. This suggests that multicollinearity is not a serious concern in our model, and the predictors are sufficiently independent to proceed with regression analysis.
+
+```{r}
+#| output: true
+house_numeric_only = house[, sapply(house, is.numeric)]
+house_numeric_lreg = lm(log_SalePrice ~ ., data = house_numeric_only)
+
+library(dplyr)
+
+vif_table <- car::vif(house_numeric_lreg)
+
+if (is.numeric(vif_table)) {
+  vif_table <- tibble::enframe(vif_table, name = "Variable", value = "VIF")
+}
+
+vif_table %>%
+  mutate(VIF = round(VIF, 2)) %>%
+  kable(caption = "Variance Inflation Factors (VIF) for Full Model")
+```
+
+## **Model Selection**
+
+To select the final set of explanatory variables, we used forward selection. Starting with an empty model, we added variables one by one based on how much they improved the model fit. Although the original dataset contained over 80 variables, we narrowed it down to 14 (includes quadratic terms) after filtering and diagnostic checks.
+
+To determine the best stopping point, we considered both Mallows' Cp and AIC values. The Cp plot showed that the score stabilized around 14 variables, with little improvement beyond that. AIC also reached its lowest point with 14 variables.
+
+Following the principle of parsimony, we decided to go with the simplest model, selecting 14 variables as the final choice.
+
+```{r}
+#| output: false
+
+full_model <- lm(log_SalePrice ~ ., data = house)
+
+forward <- ols_step_forward_r2(full_model)
+
+forward$metrics
+```
+
+```{r fig.height=5,fig.width=10}
+#| output: true
+
+cp_scores <- numeric(length = length(forward$metrics$variable))
+num_params <- numeric(length = length(forward$metrics$variable))
+cp_diff <- numeric(length = length(forward$metrics$variable))
+
+# Mallow's Cp
+for (i in seq_along(forward$metrics$variable)) {
+  predictors <- forward$metrics$variable[1:i]
+  formula_str <- paste("log_SalePrice ~", paste(predictors, collapse = " + "))
+  model_i <- lm(as.formula(formula_str), data = house)
+  cp_val <- ols_mallows_cp(model_i, full_model)
+  cp_scores[i] <- cp_val
+  num_params[i] <- length(coef(model_i)) + 1
+  cp_diff[i] = cp_val - (length(predictors) + 1)
+}
+
+# AIC
+predictors <- setdiff(names(house), c("log_SalePrice"))
+
+# Initialize
+selected <- c()
+aic_values <- numeric()           # Store AIC at each step
+num_predictors <- numeric()       # Number of predictors at each step
+
+# Start with intercept-only model
+current_formula <- as.formula("log_SalePrice ~ 1")
+current_model <- lm(current_formula, data = house)
+aic_values[1] <- AIC(current_model)
+num_predictors[1] <- 0
+
+# Forward selection loop
+for (i in seq_along(predictors)) {
+  remaining <- setdiff(predictors, selected)
+  
+  # Try adding each remaining variable and calculate AIC
+  aic_candidates <- sapply(remaining, function(var) {
+    temp_formula <- as.formula(paste("log_SalePrice ~", paste(c(selected, var), collapse = " + ")))
+    AIC(lm(temp_formula, data = house))
+  })
+  
+  # Select the variable that gives the lowest AIC
+  best_var <- names(which.min(aic_candidates))
+  selected <- c(selected, best_var)
+  
+  # Refit the model with updated predictors
+  current_formula <- as.formula(paste("log_SalePrice ~", paste(selected, collapse = " + ")))
+  current_model <- lm(current_formula, data = house)
+  
+  # Store metrics
+  aic_values[i + 1] <- AIC(current_model)
+  num_predictors[i + 1] <- length(selected)
+}
+
+
+par(mfrow = c(1, 2))
+# Plot Cp vs p
+plot(
+  num_params - 1,
+  cp_scores, type = "b", pch = 19,
+     xlab = "Number of Predictors k",
+     ylab = "Mallow's Cp",
+     main = "Mallow's Cp vs Number of Covariates")
+abline(0, 1, col = "red", lty = 2)
+# abline(v = which.min(which(cp_diff > 0)), col = "blue", lty = 2)
+# Find index of the smallest positive cp_diff
+
+valid_cp <- which(cp_diff > 0)
+best_cp_index <- valid_cp[which.min(cp_diff[valid_cp])]
+
+# Correct vertical line
+abline(v = num_params[best_cp_index] - 1, col = "blue", lty = 2)
+       
+# Plot AIC vs. number of predictors
+plot(0:length(predictors), aic_values, type = "b",
+     xlab = "Number of Predictors", ylab = "AIC",
+     main = "Change in AIC with Forward Selection")
+
+min_index <- which.min(aic_values)
+min_num_pred <- num_predictors[min_index]
+abline(v = min_num_pred, col = "red", lty = 2)
+```
+
+*Fig 5: Model Selection using Mallows’ Cp and AIC*
+
+```{r}
+#| output: false
+cp_diff
+```
+
+## Final Model Diagnostics
+
+After fitting the final model, we revisited the regression assumptions by checking the diagnostic plots. The residuals vs fitted values plot showed a relatively random spread, which is a good indication that the homoscedasticity assumption (constant variance of errors) holds. The Q-Q plot showed that the residuals mostly followed a normal distribution, with only minor deviations at the tails.
+
+The scale-location plot did not show any clear trends, suggesting that the variance of the residuals is consistent across fitted values. The residuals vs leverage plot did not reveal any influential data points that could excessively impact the model, and there were no values of Cook’s distance greater than 1. Cook’s distance is a measure of how much a data point influences the model, and values greater than 1 indicate a significant impact. Since no values exceeded 1, this indicates that there are no outliers significantly affecting the model.
+
+These diagnostic results suggest that the final model meets the assumptions required for linear regression, making it suitable for interpretation and further analysis.
+
+```{r}
+#| output: false
+#using the corvariate that selected by forward selection
+selected_vars = forward$metrics$variable[1:14]
+
+formula_text <- paste("log_SalePrice ~", paste(selected_vars, collapse = " + "))
+simpler_formula <- as.formula(formula_text)
+
+simpler_additive_model <- lm(simpler_formula, data = house)
+summary(simpler_additive_model)
+```
+
+```{r}
+#| output: false
+
+# delete the non-significant one, help simplifier the model
+final_vars = selected_vars[selected_vars != "Electrical" & 
+                             selected_vars != "Yr.Sold" &
+                             selected_vars != "Utilities" &
+                             selected_vars != "Quatratic_Year.Built"]
+final_formula_text <- paste("log_SalePrice ~", paste(final_vars, collapse = " + "))
+final_formula <- as.formula(final_formula_text)
+
+final_model <- lm(final_formula, data = house)
+```
+
+```{r fig.height=4,fig.width=15}
+#| output: true
+par(mfrow = c(1, 4))
+plot(final_model)
+```
+
+*Fig. 6: Final Model Diagnostics, Assumption Check, Scale-Location and Residuals vs Leverage Plots for Final Model*
+
+## **Interaction Term**
+
+We explored all possible interactions between categorical variables (such as `Central.Air`, `Lot.Shape`, `Electrical`, `Utilities`) and numeric variables. Although the model's fitness increased slightly when these interactions were included, we decided to select only the significant interaction terms for the final model, named `simpler_interactive_model`.
+
+Here is a summary of the model comparison:
+
+|                           | number of estimator ($\hat{\beta}$) | adj $R^2$ |
+|-----------------------|-------------------------------|------------------|
+| additive_model            | 25                                  | 0.8434    |
+| simpler_additive_model    | 22                                  | 0.8434    |
+| final_model               | 13                                  | 0.8423    |
+| interactive_model         | 39                                  | 0.8531    |
+| simpler_interactive_model | 15                                  | 0.8443    |
+
+The simpler interactive model showed an adjusted $R^{2}$ close to the interactive model but with fewer parameters, making it a more efficient choice.
+
+The fit of the model with interactions improved slightly, but for the sake of model simplicity and clarity, we decided to include only the most significant interaction terms in the final model. A complete list of these interaction terms can be found in the appendix (page 13).
+
+## **Outliers, Leverage, Influence (Limitation)**
+
+After building our model, we examined the potential outliers, leverage points, and influential data points. This step helps in assessing the reliability of the model and identifying any data points that might distort the results. The plot above highlights the outliers, points with high leverage, and influential data points in our dataset.
+
+```{r fig.height=4,fig.width=5}
+#| output: true
+#| fig.align: center
+
+influence_data <- influence.measures(final_model)
+leverage <- hatvalues(final_model)
+standardized_residuals <- rstandard(final_model)
+cooks_d <- cooks.distance(final_model)
+
+n <- nrow(house)
+p <- length(coef(final_model))  
+leverage_threshold <- 2 * p / n
+cooks_threshold <- 4 / n
+
+
+plot(leverage, standardized_residuals,
+     xlab = "Leverage", ylab = "Standardized Residuals",
+     main = "Outliers, Leverage, and Influence Points")
+abline(h = c(-2, 2), col = "red", lty = 2)
+abline(v = leverage_threshold, col = "blue", lty = 2)
+
+outlier_points <- which(abs(standardized_residuals) > 2)
+points(leverage[outlier_points], standardized_residuals[outlier_points], col = "red", pch = 19)
+
+leverage_points <- which(leverage > leverage_threshold)
+points(leverage[leverage_points], standardized_residuals[leverage_points], col = "blue", pch = 17)
+
+influence_points <- which(cooks_d > cooks_threshold)
+points(leverage[influence_points], standardized_residuals[influence_points], col = "purple", pch = 4)
+
+legend("topright", legend = c("Outlier", "High Leverage", "Influential"),
+       col = c("red", "blue", "purple"), pch = c(19, 17, 4))
+```
+
+*Fig. 7: Outliers, Leverage, and Influence Points*
+
+-   **Outliers** (marked as red circles) represent data points that lie far from the rest of the data. These can significantly affect the model's coefficients and predictions.
+
+-   **High leverage points** (indicated by blue triangles) are points that have extreme values for the independent variables. While not necessarily outliers in terms of the response variable, they can still influence the model strongly, especially if they are far from the center of the data.
+
+-   **Influential points** (shown as purple crosses) are points that have both high leverage and residuals that significantly deviate from the model's predictions. These points can have a major effect on the regression coefficients and, therefore, on the overall model results.
+
+In our case, we observed that there are a significant number of outliers and high leverage points in the data, which may pose limitations to the model. The presence of these points suggests that the model may be sensitive to these extreme values, which could lead to less reliable predictions and affect the generalizability of the results. These outliers and influential points need to be carefully addressed, either by transforming the data or removing problematic points, to ensure the robustness of the model.
+
+## Final Model
+
+After log transformation, multi-collinearity check, model selection, and interaction term investigation, our final model of choice uses the logarithm of sale prices with covariates being overall quality rating (`Overall.Qual`), above-ground living area (`Gr.Liv.Area`), construction year (`Year.Built`), garage area (`Garage.Area`), squared above-ground living area(`Quatratic_Gr.Liv.Area`), lot size(`Lot.Area`), status of central air conditioning (`Central.AirY`), number of kitchens above ground (`Kitchen.AbvGr`), shape of the lot (`Lot.Shape`) and number of bedroom above ground (`Bedroom.AbvGr`). This model satisfy linear relationship, homoscedasticity and variance normality assumption. Based on the principle of parsimony, it have relative high adjusted $R^2$ of $0.8423$ and use fewer covariates. Almost every coefficient are significantly different from 0 at significant level 5% in the hypothesis test.
+
+```{r, results='asis'}
+#| output: true
+
+# summary(final_model)
+
+coef_tbl <- tidy(final_model)
+
+model_stats <- glance(final_model) %>%
+  select(r.squared, adj.r.squared) %>%
+  mutate(across(everything(), round, 4))
+
+coef_tbl %>%
+  mutate(across(where(is.numeric), round, 4)) %>%
+  kable(caption = "Summary of Final Model")
+
+cat(paste0(
+  "\\begin{center}\n",
+  "\\textbf{Model $R^2$:} ", round(model_stats$r.squared, 4),
+  " \\quad \\textbf{Adjusted $R^2$:} ", round(model_stats$adj.r.squared, 4),
+  "\n\\end{center}\n"
+))
+```
+
+## **Discussion and Conclusion**
+
+In conclusion, the final linear regression model based on 10 covariates satisfies the essential assumptions for regression analysis and provides meaningful insights into the key factors affecting house prices. By applying a log transformation to `SalePrice`, we stabilized the variance and made the error distribution more normal, addressing the issues found in the initial model’s diagnostic plots. We used forward selection to refine the model by selecting only the most relevant variables.
+
+In our final model, we selected $10$ covariates ($13$ coefficients $\hat{\beta}$ including categorical covariates) along with the logarithmic transformation of sale price, specifically modeling `log(SalePrice/10000)` as the response variable. This model directly addresses the primary research question posed in the introduction. We found that for every additional square foot of living area (`Gr.Liv.Area`), the expected log-transformed sale price increases by approximately $0.0004$ (p \< 0.001), indicating a strong and statistically significant relationship. On the original scale, this corresponds to an approximate $0.04\%$ increase in sale price per additional square foot—a small but cumulative effect, consistent with expectations that larger homes command higher prices. Interestingly, the number of bedrooms above grade (`Bedroom.AbvGr`) was associated with a $2.6\%$ decrease in expected sale price for each additional bedroom, holding other variables constant. Although counterintuitive, this negative association persisted even after exploring interaction terms, suggesting the possibility of confounding. For example, homes with more bedrooms may be of lower overall quality or have smaller room sizes. Kassab (n.d.) offers a relevant interpretation: increasing the number of bedrooms and bathrooms while holding total area constant can reduce a home’s appeal, as it divides space into smaller rooms and diminishes perceived spaciousness. Additionally, the year of construction (`Year.Built`) was positively associated with sale price. Each one-year increase corresponds to an estimated $0.002$ increase in the log-transformed sale price, or roughly a $0.2\%$ increase in actual sale price, indicating that newer homes tend to be more valuable. Overall, our findings provide insights for both homebuyers and sellers in Ames, Iowa: newer homes with larger living areas and fewer bedrooms tend to achieve higher market values.
+
+However, a few limitations were identified in the analysis. Outliers, high leverage points, and influential data points suggest that the model is sensitive to extreme values. These issues were addressed during the diagnostic phase, but further exploration and refinement may be needed to ensure the robustness of the model. The model with interaction terms showed a slight improvement in fit, but for simplicity, only the most significant interaction terms were included in the final model.
+
+Overall, the model shows promising performance, but there is still room for improvement by addressing outliers and considering more complex interactions. As a result, this model provides a solid foundation for understanding the key factors influencing house prices, but further refinements are needed to enhance its predictive power and generalizability.
+
+## Appendix Interaction Term
+
+```{r fig.height=15, fig.width=15}
+#| output: true
+
+library(ggplot2)
+library(rlang)
+library(patchwork)
+
+plot_list <- list()
+final_numeric <- final_vars[final_vars != "Lot.Shape" & final_vars != "Central.Air"]
+
+for (var in final_numeric) {
+  p <- ggplot(house, aes(x = !!sym(var), y = log_SalePrice, color = Central.Air)) +
+    geom_point(alpha = 0.5) +
+    geom_smooth(method = "lm", formula = y ~ x, se = FALSE) +
+    labs(
+      title = paste("Interaction:", var, "and Central Air"),
+      x = var,
+      y = "log(SalePrice)"
+    ) +
+    theme_minimal()
+  plot_list[[var]] <- p
+}
+
+wrap_plots(plot_list[1:8], ncol = 3)
+```
+
+```{r fig.height=15,fig.width=15}
+#| output: true
+plot_list <- list()
+for (var in final_numeric) {
+  p <- ggplot(house, aes(x = .data[[var]], y = log_SalePrice, color = Lot.Shape)) +
+    geom_point(alpha = 0.5) +
+    geom_smooth(method = "lm", formula = y ~ x, se = FALSE) +
+    labs(
+      title = paste("Interaction:", var, "and Lot.Shape"),
+      x = var,
+      y = "log(SalePrice)"
+    ) +
+    theme_minimal()
+  
+  # print(p)
+  plot_list[[var]] <- p
+}
+
+wrap_plots(plot_list[1:8], ncol = 3)
+```
+
+```{r, results='asis'}
+#| output: true
+
+# different slope shown that exists interaction
+interactive_model = lm(log_SalePrice ~ Overall.Qual + Gr.Liv.Area + Year.Built + Garage.Area +
+                   Quatratic_Gr.Liv.Area + Lot.Area + Central.Air + Kitchen.AbvGr + Lot.Shape
+                   + Bedroom.AbvGr + 
+                   
+                   (Year.Built + Garage.Area + Quatratic_Gr.Liv.Area + 
+                      Kitchen.AbvGr + Bedroom.AbvGr):Central.Air + 
+                   (Overall.Qual + Gr.Liv.Area + Year.Built + Garage.Area +
+                   Quatratic_Gr.Liv.Area + Lot.Area + Bedroom.AbvGr):Lot.Shape,
+                   
+                 data = house)
+
+# summary(interactive_model)
+
+interactive_summary <- tidy(interactive_model)
+interactive_stats <- glance(interactive_model)
+
+kable(interactive_summary, digits = 3, caption = "Summary of Interactive Model")
+
+cat(paste0(
+  "\\begin{center}\n",
+  "\\textbf{Model $R^2$:} ", round(interactive_stats$r.squared, 4),
+  " \\quad \\textbf{Adjusted $R^2$:} ", round(interactive_stats$adj.r.squared, 4),
+  "\n\\end{center}\n"
+))
+```
+
+```{r, results='asis'}
+#| output: true
+
+# delete the not significant one. this can make the model simpler
+simpler_interactive_model = lm(log_SalePrice ~ Overall.Qual + Gr.Liv.Area + Year.Built+ Quatratic_Gr.Liv.Area + Lot.Area +
+                               Kitchen.AbvGr +(Garage.Area + Quatratic_Gr.Liv.Area + Bedroom.AbvGr):Central.Air +
+                               Quatratic_Gr.Liv.Area:Lot.Shape, data = house)
+
+# summary(simpler_interactive_model)
+simpler_summary <- tidy(simpler_interactive_model)
+simpler_stats <- glance(simpler_interactive_model)
+
+kable(simpler_summary, digits = 3, caption = "Summary of Simpler Interactive Model")
+
+cat(paste0(
+  "\\begin{center}\n",
+  "\\textbf{Model $R^2$:} ", round(simpler_stats$r.squared, 4),
+  " \\quad \\textbf{Adjusted $R^2$:} ", round(simpler_stats$adj.r.squared, 4),
+  "\n\\end{center}\n"
+))
+```
+
+## References
+
+Kassab, T. (n.d.). *Multivariate Real-Estate Modeling: Bayesian and Frequentist Methods*. Retrieved April 16, 2025, from https://rstudio-pubs-static.s3.amazonaws.com/373107_1168996f5a8f470f8630e08f6aa2df3a.html
+
+Office of the United Nations High Commissioner for Human Rights. (n.d.). The human right to adequate housing. United Nations. Retrieved April 10, 2025, from https://www.ohchr.org/en/special-procedures/sr-housing/human-right-adequate-housing
+
+Reinhart, A. (2019, August 14). House prices in Ames, Iowa. CMU S&DS Data Repository. https://cmustatistics.github.io/data-repository/money/ames-housing.html
